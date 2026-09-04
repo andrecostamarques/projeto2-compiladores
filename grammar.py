@@ -140,19 +140,72 @@ class Grammar:
 
     def first_of_sequence(self, symbols: tuple[str, ...]) -> set[str]:
         """Calcule FIRST para uma sequência de zero ou mais símbolos."""
-        raise NotImplementedError("implemente FIRST de uma sequência")
+        if not symbols:
+            return {EPSILON}
+
+        result: set[str] = set()
+        for symbol in symbols:
+            if symbol not in self.nonterminals:
+                result.add(symbol)
+                break
+            symbol_first = self.first.get(symbol, set())
+            result.update(symbol_first - {EPSILON})
+            if EPSILON not in symbol_first:
+                break
+        else:
+            result.add(EPSILON)
+
+        return result
 
     def build_first(self) -> None:
         """Preencha self.first por iteração até um ponto fixo."""
-        raise NotImplementedError("implemente FIRST")
+        self.first = {nonterminal: set() for nonterminal in self.nonterminals}
+        changed = True
+        while changed:
+            changed = False
+            for production in self.productions:
+                rhs_first = self.first_of_sequence(production.rhs)
+                target = self.first[production.lhs]
+                if not rhs_first.issubset(target):
+                    target.update(rhs_first)
+                    changed = True
 
     def build_follow(self) -> None:
         """Preencha self.follow; FIRST deve ter sido calculado antes."""
-        raise NotImplementedError("implemente FOLLOW")
+        self.follow = {nonterminal: set() for nonterminal in self.nonterminals}
+        if self.start_symbol in self.follow:
+            self.follow[self.start_symbol].add(EOF)
+
+        changed = True
+        while changed:
+            changed = False
+            for production in self.productions:
+                current_follow = set(self.follow[production.lhs])
+                for symbol in reversed(production.rhs):
+                    if symbol in self.nonterminals:
+                        target = self.follow[symbol]
+                        if not current_follow.issubset(target):
+                            target.update(current_follow)
+                            changed = True
+                        symbol_first = self.first.get(symbol, set())
+                        if EPSILON in symbol_first:
+                            current_follow = current_follow | (symbol_first - {EPSILON})
+                        else:
+                            current_follow = symbol_first - {EPSILON}
+                    else:
+                        current_follow = {symbol}
 
     def build_start(self) -> None:
         """Associe a cada produção seu conjunto START."""
-        raise NotImplementedError("implemente START")
+        self.start = {}
+        for production in self.productions:
+            beta_first = self.first_of_sequence(production.rhs)
+            if EPSILON in beta_first:
+                self.start[production] = (
+                    beta_first - {EPSILON}
+                ) | self.follow[production.lhs]
+            else:
+                self.start[production] = set(beta_first)
 
     def build_sets(self) -> None:
         self.build_first()
@@ -160,9 +213,29 @@ class Grammar:
         self.build_start()
 
     def eliminate_direct_left_recursion(self, nonterminal: str) -> bool:
-        """Elimine a recursão direta de um não terminal, se existir."""
-        raise NotImplementedError("implemente a remoção de recursão direta")
+        productions = self.productions_for(nonterminal)
+        alphas: list[tuple[str, ...]] = []
+        betas: list[tuple[str, ...]] = []
 
+        for prod in productions:
+            if prod.rhs and prod.rhs[0] == nonterminal:
+                alphas.append(prod.rhs[1:])
+            else:
+                betas.append(prod.rhs)
+
+        if not alphas:
+            return False
+
+        helper = self._fresh_nonterminal(nonterminal)
+        self._insert_nonterminal_after(nonterminal, helper)
+
+        new_a_alts = [b + (helper,) for b in betas]
+        new_helper_alts = [a + (helper,) for a in alphas] + [()]
+
+        self._replace_productions(nonterminal, new_a_alts)
+        self._replace_productions(helper, new_helper_alts)
+        return True
+        
     def eliminate_all_direct_left_recursion(self) -> None:
         for nonterminal in list(self.nonterminals):
             self.eliminate_direct_left_recursion(nonterminal)
